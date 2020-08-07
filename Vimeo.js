@@ -1,5 +1,6 @@
 import videojs from 'video.js';
-import VimeoPlayer from '@vimeo/player';
+// import VimeoPlayer from '@vimeo/player';
+import VimeoPlayer from './vimeo/player';
 
 let cssInjected = false;
 
@@ -45,8 +46,18 @@ const Tech = videojs.getTech('Tech');
  * @class Vimeo
  */
 
+
+const VM = {
+  PlayerState: {
+    ENDED: 'ended',
+    PLAYING: 'play',
+    PAUSED: 'pause',
+  }
+}
+
+
 const Vimeo = videojs.extend(Tech, {
-// class Vimeo extends Tech {
+  // class Vimeo extends Tech {
   constructor(options, ready) {
     Tech.call(this, options, ready);
     // super(options, ready);
@@ -90,6 +101,8 @@ const Vimeo = videojs.extend(Tech, {
       // controls: 0,
     };
 
+    // console.log('lll', this.options_);
+
     if (this.options_.autoplay) {
       vimeoOptions.autoplay = true;
     }
@@ -112,33 +125,288 @@ const Vimeo = videojs.extend(Tech, {
       vimeoOptions.color = this.options_.color.replace(/^#/, '');
     }
 
+    console.log('this.options_.seekable', this.options_.seekable)
+    this.seekable = this.options_.seekable != 0;
+    this.supposedCurrentTime = 0;
+
     this._player = new VimeoPlayer(this.el(), vimeoOptions);
     this.initVimeoState();
+    // this.initSeekedInterval();
 
-    ['play', 'pause', 'ended', 'timeupdate', 'progress', 'seeked'].forEach(e => {
-      this._player.on(e, (progress) => {
-        if (this._vimeoState.progress.duration !== progress.duration) {
-          this.trigger('durationchange');
-        }
-        this._vimeoState.progress = progress;
+    const self = this;
+
+    // ['play', 'pause', 'ended', 'timeupdate', 'progress', 'seeked'].forEach(e => {
+
+
+    ['play', 'pause', 'ended', 'timeupdate'].forEach(e => {
+      this._player.on(e, () => {
         this.trigger(e);
       });
     });
 
-    this._player.on('pause', () => (this._vimeoState.playing = false));
-    this._player.on('play', () => {
-      this._vimeoState.playing = true;
-      this._vimeoState.ended = false;
+    this._player.on('progress', (progress) => {
+      if (this._vimeoState.progress.duration !== progress.duration) {
+        this.trigger('durationchange');
+      }
+      // console.log('in PPPPROOOOG', progress)
+      this._vimeoState.progress = progress;
     });
-    this._player.on('ended', () => {
-      this._vimeoState.playing = false;
-      this._vimeoState.ended = true;
+
+    this._player.on('seeked', (progress) => {
+
+      this._player.getPlayed().then(played => {
+        console.log('this.seeked', played, progress, this._vimeoState)
+      });
+
+      if (this._vimeoState.progress.duration !== progress.duration) {
+        this.trigger('durationchange');
+      }
+      // this._vimeoState.progress = progress;
+      this.onSeeked();
     });
+
+    // Store the supposedCurrentTime in state
+    this._player.on('timeupdate', (data) => {
+      if (self.seekable) {
+        return;
+      }
+
+      // this._player.getPlayed().then(played => {
+      //   console.log('this.played', played)
+      // });
+
+      // console.log(this._player, data, this)
+
+      this._player.getSeeking().then(seeking => {
+        if (!seeking) {
+          // console.log(Math.abs(data.seconds - this.supposedCurrentTime))
+          // console.log('supposedCurrentTime = ', data.seconds)
+          this.supposedCurrentTime = data.seconds;
+        }
+      });
+    });
+
+    // Seeking
+    this._player.on('seeking', (progress) => {
+      if (this._vimeoState.progress.duration !== progress.duration) {
+        this.trigger('durationchange');
+      }
+
+      if (this.lastState === VM.PlayerState.PAUSED) {
+        this.timeBeforeSeek = this.currentTime();
+      }
+
+      this.wasPausedBeforeSeek = this.paused();
+
+      // console.log(this._vimeoState)
+
+      // A seek event during pause does not return an event to trigger a seeked event,
+      // so run an interval timer to look for the currentTime to change
+      // console.log(
+      //   'Seeking, checking previous state',
+      //   this._vimeoState,
+      //   progress.seconds,
+      //   'Is paused?',
+      //   this.paused(),
+      //   this.lastState,
+      //   this.supposedCurrentTime
+      // );
+
+      const {
+        duration,
+        seconds
+      } = progress;
+
+      this.trigger('timeupdate');
+      this.trigger('seeking');
+      this.isSeeking = true;
+
+      if (this.paused() && this.supposedCurrentTime != seconds) {
+        clearInterval(this.checkSeekedInPauseInterval);
+        this.initSeekedInterval();
+      }
+
+
+      // Handle not seekable case
+      // NB: Uncomment to see the played ranges
+      // logPlayedRange();
+      if (this.seekable) {
+        return;
+      }
+
+      // Because in fullscreen it can still continue to the end sometimes
+      // if (duration - seconds < 5) {
+      //   this.pause();
+      // }
+
+      // accept rewind
+      if (seconds < this.supposedCurrentTime) {
+        return;
+      }
+
+      // accept seek to already played time
+      const isPlayed = (time) => {
+        return this._player.getPlayed().then((played) => {
+          for (let i = 0; i < played.length; i++) {
+            let start = 0, end = 0;
+            start = played[i][0];
+            end = played[i][1];
+            if (end - start < 1) {
+              continue;
+            }
+            if (time >= start && time <= end) {
+              return true;
+            }
+          }
+          return false;
+        })
+      }
+
+      isPlayed(seconds).then((played) => {
+        // console.log('played ?', played, seconds);
+        if (played) {
+          return
+        }
+        // guard agains infinite recursion:
+        // user seeks, seeking is fired, currentTime is modified, seeking is fired, current time is modified, ...
+        let delta = seconds - this.supposedCurrentTime;
+        if (Math.abs(delta) > 0.01) {
+          console.log("Seeking is disabled", seconds, this.supposedCurrentTime);
+          this.setCurrentTime(this.supposedCurrentTime);
+          // this._vimeoState.progress = progress;
+        }
+      });
+    });
+
+    // this._player.on('pause', () => (this._vimeoState.playing = false));
+    // this._player.on('play', () => {
+    //   this._vimeoState.playing = true;
+    //   this._vimeoState.ended = false;
+    // });
+    // this._player.on('ended', () => {
+    //   this._vimeoState.playing = false;
+    //   this._vimeoState.ended = true;
+    // });
+
+    ['pause', 'play', 'ended'].forEach(state => {
+      this._player.on(state, async (progress) => {
+        // First, make sure it's working
+        // console.log(state, this.lastState);
+        if (this.lastState === undefined && state == VM.PlayerState.PLAYING && !this.seekable) {
+          this._vimeoState.playing = true;
+          this.setCurrentTime(0);
+        }
+
+        // Save the last state
+        this.lastState = state;
+        switch (state) {
+          case VM.PlayerState.PAUSED: {
+            this._vimeoState.playing = false
+            return;
+          }
+          case VM.PlayerState.ENDED: {
+            this._vimeoState.playing = false;
+            this._vimeoState.ended = true;
+            const playedWithOffset = (await this.getPlayed()) + 10;
+
+            if (playedWithOffset < progress.duration) {
+              return; // end event occured from seeking to it.
+              // Don't consider the video as "completed and let it auto seek back
+            }
+            // console.log('can seek now');
+            this.seekable = true;
+            this.supposedCurrentTime = 0;
+            return;
+          }
+          case VM.PlayerState.PLAYING: {
+            this._vimeoState.playing = true;
+            this._vimeoState.ended = false;
+            return;
+          }
+        }
+      });
+    })
+
+
+
     this._player.on('volumechange', (v) => (this._vimeoState.volume = v));
     this._player.on('error', e => this.trigger('error', e));
 
     this.triggerReady();
   },
+
+
+  async getPlayed() {
+    const played = await this._player.getPlayed();
+    let total = 0;
+    for (let i = 0; i < played.length; i++) {
+      total += played.end(i) - played.start(i);
+    }
+    return total;
+  },
+
+  isPlayed(time) {
+    return this._player.getPlayed().then((played) => {
+      for (let i = 0; i < played.length; i++) {
+        let start = 0, end = 0;
+        start = played[i][0];
+        end = played[i][1];
+        if (end - start < 1) {
+          continue;
+        }
+        if (time >= start && time <= end) {
+          return true;
+        }
+      }
+      return false;
+    })
+  },
+
+  initSeekedInterval() {
+    this.checkSeekedInPauseInterval = setInterval(async () => {
+      if (this.lastState !== VM.PlayerState.PAUSED || !this.isSeeking) {
+        // If something changed while we were waiting for the currentTime to change,
+        //  clear the interval timer
+        console.log('clearing interval')
+        clearInterval(this.checkSeekedInPauseInterval);
+      } else {
+        const currentTime = await this._player.getCurrentTime();
+        console.log('currentTime', currentTime, 'supposedCurrentTime', this.supposedCurrentTime);
+        if (currentTime !== this.supposedCurrentTime) {
+          // console.log('currentTime !== this.supposedCurrentTime')
+          this.trigger('timeupdate');
+          this.onSeeked();
+        }
+      }
+    }, 250);
+  },
+
+  //////// Customizing seekable //////////
+
+  seeking() {
+    return this.isSeeking;
+  },
+
+  isSeekable() {
+    if (!this._player) {
+      return videojs.createTimeRange();
+    }
+    return videojs.createTimeRange(0, this._player.getDuration());
+  },
+
+  onSeeked() {
+    clearInterval(this.checkSeekedInPauseInterval);
+    this.isSeeking = false;
+
+    // console.log('onseeked', this.wasPausedBeforeSeek)
+    if (this.wasPausedBeforeSeek || this.wasPausedBeforeSeek === undefined) {
+      this.pause();
+    }
+
+    this.trigger('seeked');
+  },
+
+  ////////////////////////////////////////
 
   initVimeoState() {
     const state = this._vimeoState = {
@@ -190,7 +458,17 @@ const Vimeo = videojs.extend(Tech, {
   },
 
   setCurrentTime(time) {
+
+    console.log('setCurrentTime: is seeking ? ', this.isSeeking, time);
+
+    if (!this.isSeeking) {
+      this.wasPausedBeforeSeek = this.paused();
+    }
+
     this._player.setCurrentTime(time);
+
+    // Added to customize the seeking
+    this.onSeeked();
   },
 
   volume() {
@@ -220,6 +498,9 @@ const Vimeo = videojs.extend(Tech, {
   },
 
   play() {
+    // Added seeking
+    this.wasPausedBeforeSeek = false;
+
     this._player.play();
   },
 

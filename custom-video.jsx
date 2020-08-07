@@ -1,7 +1,7 @@
 import { h, Component } from "preact";
 import Videojs from "./video.js";
 import PropTypes from 'prop-types';
-import './dist/video-js.css'
+import './videojs/video-js.css'
 import './custom-video.less'
 
 

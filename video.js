@@ -28,6 +28,7 @@ const vimeoConfigDefault = {
     // src: "https://vimeo.com/148751763"
   }],
   vimeo: {
+    seekable: 0,
     // color: "#fbc51b"
   }
 };
@@ -39,6 +40,7 @@ export default class VideoPlayer extends Component {
     this.state = {
       duration: 0,
       root: null,
+      supposedCurrentTime: 0,
     }
   }
 
@@ -68,7 +70,7 @@ export default class VideoPlayer extends Component {
 
     function onLoadedMetadata() {
       const duration = this.duration();
-      // console.log('duration', duration)
+      console.log('duration', duration)
       if (duration && self.state.duration === 0) {
         // console.log(self.base);
         dispatchDurationEvent(duration);
@@ -94,13 +96,24 @@ export default class VideoPlayer extends Component {
       this.videoNode,
       videojsOptions,
       function onPlayerReady() {
-        console.log('onPlayerReady', self.props);
+        // console.log('onPlayerReady', self.props);
         if (self.props.controls != 1) {
           this.controlBar.progressControl.disable();
+          // this.addClass('vjs-controls-disabled');
+          // this.removeClass('vjs-controls-enabled');
+          console.log('checkplayer', this)
         }
-        this.one("loadedmetadata", onLoadedMetadata);
-        this.one("play", onPlay);
-        this.one('ended', dispatchFinishEvent);
+        this.on("loadedmetadata", onLoadedMetadata);
+        this.on("play", onPlay);
+        this.on('ended', dispatchFinishEvent);
+
+        // this.on('seeking', function (data) {
+        //   console.log('seeking', data);
+        // })
+
+        // this.on('seeked', function () {
+        //   console.log('seeked', this, this.currentTime(), this.setCurrentTime);
+        // });
       });
 
 
@@ -136,6 +149,7 @@ export default class VideoPlayer extends Component {
     if (platform === "vimeo") {
       vimeoConfig = { ...vimeoConfigDefault };
       vimeoConfig['sources'][0]['src'] = src;
+      vimeoConfig['vimeo']['seekable'] = controls;
     }
 
 
@@ -152,7 +166,7 @@ export default class VideoPlayer extends Component {
           data-setup={platform ?
             (
               platform === "youtube" ? JSON.stringify(youtubeConfig) :
-              platform === "vimeo" ? JSON.stringify(vimeoConfig) : null
+                platform === "vimeo" ? JSON.stringify(vimeoConfig) : null
             ) : null}
         />
       </div>
